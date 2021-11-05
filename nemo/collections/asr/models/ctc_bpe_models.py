@@ -275,8 +275,6 @@ class EncDecCTCModelBPE(EncDecCTCModel, ASRBPEMixin):
             'sample_rate': self.preprocessor._sample_rate,
             'batch_size': min(config['batch_size'], len(config['paths2audio_files'])),
             'shuffle': False,
-            'num_workers': os.cpu_count() - 1,
-            'pin_memory': True,
             'use_start_end_token': self.cfg.validation_ds.get('use_start_end_token', False),
         }
 

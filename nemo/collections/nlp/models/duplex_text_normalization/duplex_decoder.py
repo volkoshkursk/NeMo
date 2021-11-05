@@ -162,7 +162,7 @@ class DuplexDecoderModel(NLPModel):
                 generated_texts[idx], labels_str[idx], constants.DIRECTIONS_TO_MODE[direction]
             )
 
-            # if not pred_result:
+            # if pred_result:
             #     print()
             #     print(f"{class_name}\tInput\t{input_str[idx]}")
             #     print(f"{class_name}\tCente\t{input_centers[idx]}")

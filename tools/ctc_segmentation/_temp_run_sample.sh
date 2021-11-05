@@ -1,15 +1,16 @@
 #!/bin/bash
 
 # default values for optional arguments
-MIN_SCORE=-2
+MIN_SCORE=-10
 CUT_PREFIX=0
 SCRIPTS_DIR="scripts"
 OFFSET=0
 LANGUAGE='en' # 'en', 'ru', 'other'
-MIN_SEGMENT_LEN=0
-MAX_SEGMENT_LEN=1
-ADDITIONAL_SPLIT_SYMBOLS=" "
+MIN_SEGMENT_LEN=10
+MAX_SEGMENT_LEN=30 #0
+ADDITIONAL_SPLIT_SYMBOLS=":|;|,"
 USE_NEMO_NORMALIZATION='False'
+REMOVE_TEXT_IN_BRACKETS='{}()[]'
 
 FOLDER="de"
 #DATA_DIR="/home/ebakhturina/data/segmentation/${FOLDER}/data"
@@ -26,10 +27,11 @@ OUTPUT_DIR="output_segmentation"
 #MODEL_NAME_OR_PATH="stt_en_citrinet_512_gamma_0_25" #stt_en_citrinet_256 # "QuartzNet15x5Base-En" #
 #OUTPUT_DIR="/mnt/sdb/DATA/youtube_mayank/YT/out_${MODEL_NAME_OR_PATH}_2"
 
-#Benchmarking
-DATA_DIR="/home/ebakhturina/data/segmentation/benchmark"
+# Benchmarking
+FOLDER="" #"del"
+DATA_DIR="/home/ebakhturina/data/segmentation/benchmark/${FOLDER}"
 MODEL_NAME_OR_PATH="stt_en_citrinet_512_gamma_0_25"
-OUTPUT_DIR="/home/ebakhturina/data/segmentation/benchmark/nemo_${MODEL_NAME_OR_PATH}"
+OUTPUT_DIR="/home/ebakhturina/data/segmentation/benchmark/${FOLDER}_nemo_${MODEL_NAME_OR_PATH}"
 
 rm -rf ${OUTPUT_DIR}
 
@@ -100,14 +102,13 @@ python $SCRIPTS_DIR/prepare_data.py \
 # one might want to perform alignment with various window sizes
 # note if the alignment with the initial window size isn't found, the window size will be double to re-attempt
 # alignment
-for WINDOW in 8000 #12000
+for WINDOW in 16000 #12000
 do
   python $SCRIPTS_DIR/run_ctc_segmentation.py \
   --output_dir=$OUTPUT_DIR \
   --data=$OUTPUT_DIR/processed/ \
   --model=$MODEL_NAME_OR_PATH  \
-  --window_len $WINDOW \
-  --no_parallel || exit
+  --window_len $WINDOW || exit
 done
 
 # STEP #3 (Optional)

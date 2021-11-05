@@ -107,14 +107,19 @@ def get_segments(
         f"Text length {os.path.basename(transcript_file)}: {len(ground_truth_mat)}"
     )
 
-    timings, char_probs, char_list = cs.ctc_segmentation(config, log_probs, ground_truth_mat)
-    segments = cs.determine_utterance_segments(config, utt_begin_indices, char_probs, timings, text)
+    try:
+        timings, char_probs, char_list = cs.ctc_segmentation(config, log_probs, ground_truth_mat)
+        segments = cs.determine_utterance_segments(config, utt_begin_indices, char_probs, timings, text)
 
-    # for i, (word, segment) in enumerate(zip(text, segments)):
-    #     if i < 10:
-    #         print(f"{segment[0]:.2f} {segment[1]:.2f} {segment[2]:3.4f} {word}")
+        # for i, (word, segment) in enumerate(zip(text, segments)):
+        #     if i < 10:
+        #         print(f"{segment[0]:.2f} {segment[1]:.2f} {segment[2]:3.4f} {word}")
 
-    write_output(output_file, path_wav, segments, text, text_no_preprocessing, text_normalized)
+        write_output(output_file, path_wav, segments, text, text_no_preprocessing, text_normalized)
+
+    except Exception as e:
+        logging.info(e)
+        logging.info(f"segmentation of {transcript_file} failed")
 
 
 def _print(ground_truth_mat, vocabulary):
