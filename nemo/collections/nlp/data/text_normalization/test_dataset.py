@@ -164,6 +164,12 @@ class TextNormalizationTestDataset:
         Return: an int value (0/1) indicating whether pred and target are the same.
         """
         if inst_dir == constants.INST_BACKWARD:
+            # to have a unified format for abbreviations, e.g. U.S. == U. S.
+            target = target.replace(".", ". ").replace("  ", " ")
+            pred = pred.replace(".", ". ").replace("  ", " ")
+            pred = remove_puncts(pred)
+            target = remove_puncts(target)
+
             pred = remove_puncts(pred)
             target = remove_puncts(target)
         pred = normalize_str(pred)
