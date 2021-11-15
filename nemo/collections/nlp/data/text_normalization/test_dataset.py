@@ -170,8 +170,6 @@ class TextNormalizationTestDataset:
             pred = remove_puncts(pred)
             target = remove_puncts(target)
 
-            pred = remove_puncts(pred)
-            target = remove_puncts(target)
         pred = normalize_str(pred)
         target = normalize_str(target)
         return int(pred == target)
