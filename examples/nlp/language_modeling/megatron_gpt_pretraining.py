@@ -23,7 +23,8 @@ from pytorch_lightning.trainer.connectors.checkpoint_connector import Checkpoint
 
 from nemo.collections.nlp.models.language_modeling.megatron_gpt_model import MegatronGPTModel
 from nemo.collections.nlp.modules.common.megatron.megatron_utils import compute_model_parallel_rank
-from nemo.collections.nlp.parts.nlp_overrides import GradScaler, NLPDDPPlugin
+#from nemo.collections.nlp.parts.nlp_overrides import GradScaler, NLPDDPPlugin
+from nemo.collections.nlp.parts.nlp_overrides import GradScaler, NLPDDPPlugin, MegatronHalfPrecisionPlugin, Float16Module
 from nemo.core.config import hydra_runner
 from nemo.utils import logging
 from nemo.utils.exp_manager import StatelessTimer, exp_manager
@@ -34,13 +35,16 @@ def main(cfg) -> None:
     logging.info("\n\n************** Experiment configuration ***********")
     logging.info(f'\n{OmegaConf.to_yaml(cfg)}')
 
-    plugins = [NLPDDPPlugin(num_nodes=cfg.trainer.num_nodes)]
+    #plugins = [NLPDDPPlugin(num_nodes=cfg.trainer.num_nodes)]
+    plugins = [NLPDDPPlugin(num_nodes=cfg.trainer.num_nodes, gradient_as_bucket_view=cfg.gradient_as_bucket_view)]
     if cfg.trainer.precision == 16:
         scaler = GradScaler(
             init_scale=cfg.model.get('native_amp_init_scale', 2 ** 32),
             growth_interval=cfg.model.get('native_amp_growth_interval', 1000),
         )
-        plugins.append(NativeMixedPrecisionPlugin(precision=16, device='cuda', scaler=scaler))
+        # TODO: make the interface to set the precision plugin
+        #plugins.append(NativeMixedPrecisionPlugin(precision=16, device='cuda', scaler=scaler))
+        plugins.append(MegatronHalfPrecisionPlugin(precision=16, device='cuda', scaler=scaler))
 
     if cfg.get('cluster_type', None) == 'BCP':
         plugins.append(TorchElasticEnvironment())
@@ -69,6 +73,10 @@ def main(cfg) -> None:
     with open_dict(cfg):
         cfg.model.precision = cfg.trainer.precision
     model = MegatronGPTModel(cfg.model, trainer)
+
+    # FIXME: (1) model cating to half precision, (2) input casting to half precision
+    if True:
+        model.model = Float16Module(model.model, cfg.model.precision)
 
     trainer.fit(model)
 

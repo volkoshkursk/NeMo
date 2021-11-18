@@ -16,18 +16,25 @@ import os
 import shutil
 import tempfile
 from collections import defaultdict
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, Callable, Generator
+from contextlib import contextmanager
 
 import torch
 from pytorch_lightning.overrides import LightningDistributedModule
 from pytorch_lightning.plugins.environments.cluster_environment import ClusterEnvironment
 from pytorch_lightning.plugins.io.checkpoint_plugin import CheckpointIO
 from pytorch_lightning.plugins.training_type.ddp import DDPPlugin
+from pytorch_lightning.plugins.precision import NativeMixedPrecisionPlugin
 from pytorch_lightning.utilities.types import _PATH
 from torch.nn.parallel import DistributedDataParallel
 
 from nemo.core.connectors.save_restore_connector import SaveRestoreConnector
 from nemo.utils import AppState, logging
+from nemo.collections.nlp.modules.common.megatron.module import MegatronModule
+
+from torch.autograd import Variable
+from torch.nn.parameter import Parameter
+
 
 try:
     from apex.transformer import parallel_state
@@ -37,6 +44,11 @@ try:
 except (ImportError, ModuleNotFoundError):
 
     HAVE_APEX = False
+
+
+_FLOAT_TYPES = (torch.FloatTensor, torch.cuda.FloatTensor)
+_HALF_TYPES = (torch.HalfTensor, torch.cuda.HalfTensor)
+_BF16_TYPES = (torch.BFloat16Tensor, torch.cuda.BFloat16Tensor)
 
 
 class NLPDDPPlugin(DDPPlugin):
@@ -318,3 +330,164 @@ class GradScaler(torch.cuda.amp.GradScaler):
 
         # To prepare for next iteration, clear the data collected from optimizers this iteration.
         self._per_optimizer_states = defaultdict(torch.cuda.amp.grad_scaler._refresh_per_optimizer_state)
+        
+
+class MegatronHalfPrecisionPlugin(NativeMixedPrecisionPlugin):
+    """
+    Plugin for Half (FP16 and BF16) Precision training
+    This plugin is based on the use of master parameters
+
+    Args:
+        precision: Whether to use ``torch.float16`` (``16``) or ``torch.bfloat16`` (``'bf16'``).
+        device: The device for ``torch.autocast``.
+        scaler: An optional :class:`torch.cuda.amp.GradScaler` to use.
+    """
+
+    def __init__(
+        self, precision: Union[str, int], device: str, scaler: Optional[torch.cuda.amp.GradScaler] = None
+    ) -> None:
+        super().__init__(precision, device, scaler)
+
+#    def pre_backward(self, model: "pl.LightningModule", closure_loss: torch.Tensor) -> torch.Tensor:
+#        if self.scaler is not None:
+#            closure_loss = self.scaler.scale(closure_loss)
+#        return super().pre_backward(model, closure_loss)
+#
+#    def _run_backward(self, tensor: Tensor, model: Module, *args: Any, **kwargs: Any) -> None:
+#        if self.scaler is not None:
+#            tensor = self.scaler.scale(tensor)
+#        super()._run_backward(tensor, model, *args, **kwargs)
+
+    def optimizer_step(
+        self,
+        model: Union["pl.LightningModule", torch.nn.Module],
+        optimizer: torch.optim.Optimizer,
+        optimizer_idx: int,
+        closure: Callable[[], Any],
+        **kwargs: Any,
+    ) -> None:
+        if self.scaler is None:
+            # skip scaler logic, as bfloat16 does not require scaler
+            return super().optimizer_step(model, optimizer, optimizer_idx, closure, **kwargs)
+        if isinstance(optimizer, torch.optim.LBFGS):
+            raise MisconfigurationException(
+                f"Native AMP and the LBFGS optimizer are not compatible (optimizer {optimizer_idx})."
+            )
+        closure_result = closure()
+        # `unscale` after the closure is executed but before the `on_before_optimizer_step` hook.
+
+        # cast fp16 grads to fp32 and copy to master params' grads then remove the grads of fp16 param
+        optimizer.copy_model_grads_to_main_grads()
+        # unscale fp32 gradients
+        self.scaler.unscale_(optimizer)
+        self._after_closure(model, optimizer, optimizer_idx)
+        skipped_backward = closure_result is None
+        # in manual optimization, the closure does not return a value
+        if not isinstance(model, pl.LightningModule) or not model.automatic_optimization or not skipped_backward:
+            # note: the scaler will skip the `optimizer.step` if nonfinite gradients are found
+            self.scaler.step(optimizer, **kwargs)
+            self.scaler.update()
+
+    @contextmanager
+    def forward_context(self) -> Generator[None, None, None]:
+        """ No explicit precision casting """
+        try:
+            yield
+        finally:
+            pass
+
+#    def on_load_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
+#        if self.scaler is not None and "native_amp_scaling_state" in checkpoint:
+#            self.scaler.load_state_dict(checkpoint["native_amp_scaling_state"])
+#
+#    def on_save_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
+#        if self.scaler is not None:
+#            checkpoint["native_amp_scaling_state"] = self.scaler.state_dict()
+
+
+
+
+
+
+
+def conversion_helper(val, conversion):
+    """Apply conversion to val. Recursively apply conversion if `val`
+    #is a nested tuple/list structure."""
+    if not isinstance(val, (tuple, list)):
+        return conversion(val)
+    rtn = [conversion_helper(v, conversion) for v in val]
+    if isinstance(val, tuple):
+        rtn = tuple(rtn)
+    return rtn
+
+
+def fp32_to_float16(val, float16_convertor):
+    """Convert fp32 `val` to fp16/bf16"""
+    def half_conversion(val):
+        val_typecheck = val
+        if isinstance(val_typecheck, (Parameter, Variable)):
+            val_typecheck = val.data
+        if isinstance(val_typecheck, _FLOAT_TYPES):
+            val = float16_convertor(val)
+        return val
+    return conversion_helper(val, half_conversion)
+
+
+def float16_to_fp32(val):
+    """Convert fp16/bf16 `val` to fp32"""
+    def float_conversion(val):
+        val_typecheck = val
+        if isinstance(val_typecheck, (Parameter, Variable)):
+            val_typecheck = val.data
+        if isinstance(val_typecheck, (_BF16_TYPES, _HALF_TYPES)):
+            val = val.float()
+        return val
+    return conversion_helper(val, float_conversion)
+
+
+
+
+class Float16Module(MegatronModule):
+
+    def __init__(self, module, precision):
+        super().__init__()
+
+        if precision == 16:
+            self.add_module('module', module.half())
+            def float16_convertor(val):
+                return val.half()
+        elif precision == 'bf16':
+            self.add_module('module', module.bfloat16())
+            def float16_convertor(val):
+                return val.bfloat16()
+        else:
+            raise Exception('should not be here')
+
+        self.float16_convertor = float16_convertor
+
+
+    def set_input_tensor(self, input_tensor):
+        return self.module.set_input_tensor(input_tensor)
+
+
+    def forward(self, *inputs, **kwargs):
+        if parallel_state.is_pipeline_first_stage():
+            inputs = fp32_to_float16(inputs, self.float16_convertor)
+        outputs = self.module(*inputs, **kwargs)
+        if parallel_state.is_pipeline_last_stage():
+            outputs = float16_to_fp32(outputs)
+        return outputs
+
+
+    def state_dict(self, destination=None, prefix='', keep_vars=False):
+        return self.module.state_dict(destination, prefix, keep_vars)
+
+
+    def state_dict_for_save_checkpoint(self, destination=None, prefix='',
+                                       keep_vars=False):
+        return self.module.state_dict_for_save_checkpoint(destination, prefix,
+                                                          keep_vars)
+
+
+    def load_state_dict(self, state_dict, strict=True):
+        self.module.load_state_dict(state_dict, strict=strict)

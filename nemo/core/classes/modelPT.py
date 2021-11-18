@@ -28,12 +28,14 @@ from pytorch_lightning import LightningModule, Trainer
 from pytorch_lightning.utilities import rank_zero_only
 
 from nemo.core import optim
+from nemo.core import config
 from nemo.core.classes.common import Model
 from nemo.core.connectors.save_restore_connector import SaveRestoreConnector
 from nemo.core.optim import prepare_lr_scheduler
 from nemo.utils import logging, model_utils
 from nemo.utils.app_state import AppState
 from nemo.utils.get_rank import is_global_rank_zero
+from nemo.collections.nlp.modules.common.megatron.optimizer import Float16OptimizerWithFloat16Params
 
 __all__ = ['ModelPT']
 
@@ -555,8 +557,15 @@ class ModelPT(LightningModule, Model):
                     raise e
 
         else:
+            master_params = optimizer_args.pop('master_params', False)
             optimizer = optim.get_optimizer(optimizer_name)
             optimizer = optimizer(self.parameters(), **optimizer_args)
+            if master_params:
+                optimizer = Float16OptimizerWithFloat16Params(optimizer)
+#                # FIXME: pass a temporary optim wrapper
+#                class TempOptParams(config.optimizers.SGDParams):
+#                    pass
+#                optim.register_optimizer('Float16OptimizerWithFloat16Params', Float16OptimizerWithFloat16Params, TempOptParams)
 
             logging.info("Optimizer config = %s", str(optimizer))
 

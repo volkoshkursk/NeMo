@@ -128,6 +128,8 @@ class MegatronGPTModel(NLPModel):
             self.log('lr', lr)
             self.log('global_step', self.trainer.global_step, prog_bar=True)
             self.log('consumed_samples', self.compute_consumed_samples(self.trainer.global_step), prog_bar=True)
+            self.log('peak_memory_alloc', torch.cuda.max_memory_allocated() / (1024**3))
+            self.log('memory_alloc', torch.cuda.memory_allocated() / (1024**3))
             self._reduced_loss_buffer = []
         return loss
 
