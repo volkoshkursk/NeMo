@@ -57,7 +57,7 @@ class BeamSearchDecoderWithLM(NeuralModule):
         return {"predictions": NeuralType(('B', 'T'), PredictionsType())}
 
     def __init__(
-        self, vocab, beam_width, alpha, beta, lm_path, num_cpus, cutoff_prob=1.0, cutoff_top_n=40, input_tensor=False
+        self, vocab, beam_width, alpha, beta, lm_path, num_cpus, logger, cutoff_prob=1.0, cutoff_top_n=40, input_tensor=False
     ):
 
         try:
@@ -67,13 +67,16 @@ class BeamSearchDecoderWithLM(NeuralModule):
                 "BeamSearchDecoderWithLM requires the installation of ctc_decoders "
                 "from scripts/asr_language_modeling/ngram_lm/install_beamsearch_decoders.sh"
             )
-
+        logger.info('imported ctc_decoders')
         super().__init__()
 
         if lm_path is not None:
+            logger.info('lm_path got')
             self.scorer = Scorer(alpha, beta, model_path=lm_path, vocabulary=vocab)
+            logger.info('Scorer loaded')
         else:
             self.scorer = None
+            logger.info('Scorer is none')
         self.beam_search_func = ctc_beam_search_decoder_batch
         self.vocab = vocab
         self.beam_width = beam_width
